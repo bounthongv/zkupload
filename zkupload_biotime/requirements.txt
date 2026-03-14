@@ -1,0 +1,15 @@
+# ZK BioTime Cloud Sync - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Database Connections
+pymysql>=1.1.0          # MySQL cloud database connection
+psycopg2-binary>=2.9.9  # PostgreSQL local database (ZKBioTime)
+
+# Security & Encryption
+cryptography>=41.0.0    # Credential encryption
+
+# System Tray UI (for tray application)
+PyQt5>=5.15.9           # System tray interface
+
+# Build Tools (for creating executables)
+pyinstaller>=6.3.0      # Compile to standalone .exe

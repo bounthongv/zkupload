@@ -1,0 +1,80 @@
+# ZK Upload Project - Git Ignore File
+
+# ===========================================
+# Exclude other project folders
+# ===========================================
+hipupload_misuzu/
+zk_upload_agent/
+data/
+
+# ===========================================
+# Python
+# ===========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===========================================
+# PyInstaller
+# ===========================================
+*.manifest
+*.spec.bak
+
+# ===========================================
+# Credentials and Sensitive Files (IMPORTANT!)
+# ===========================================
+zkupload_biotime/encrypted_credentials.bin
+zkupload_biotime/sync_positions.json
+zkupload_biotime/config.json
+*.lock
+
+# ===========================================
+# Logs
+# ===========================================
+logs/
+*.log
+
+# ===========================================
+# IDE
+# ===========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===========================================
+# Testing
+# ===========================================
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ===========================================
+# Include important documentation (override)
+# ===========================================
+# Uncomment if you want to track config template
+# !zkupload_biotime/config.json.example
