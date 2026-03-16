@@ -78,3 +78,6 @@ htmlcov/
 # ===========================================
 # Uncomment if you want to track config template
 # !zkupload_biotime/config.json.example
+
+# Ignore old project
+hipupload_misuzu/

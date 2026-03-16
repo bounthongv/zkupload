@@ -16,6 +16,10 @@ import psycopg2
 import pymysql
 from datetime import datetime, timedelta
 from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configuration files
 CONFIG_FILE = "config.json"
@@ -214,8 +218,27 @@ def release_lock():
 
 
 def connect_to_postgresql():
-    """Connect to ZKBioTime PostgreSQL database"""
+    """Connect to ZKBioTime PostgreSQL database (using .env or config.json)"""
     try:
+        # Try loading from environment variables first (.env)
+        env_host = os.getenv("PG_HOST")
+        env_port = os.getenv("PG_PORT")
+        env_db = os.getenv("PG_DATABASE")
+        env_user = os.getenv("PG_USER")
+        env_pass = os.getenv("PG_PASSWORD")
+
+        if all([env_host, env_db, env_user]):
+            # print(f"Connecting to PostgreSQL using .env configuration ({env_host})...")
+            return psycopg2.connect(
+                host=env_host,
+                port=int(env_port) if env_port else 7496,
+                database=env_db,
+                user=env_user,
+                password=env_pass if env_pass else "",
+                connect_timeout=60
+            )
+
+        # Fallback to config.json
         config = load_config()
         pg_config = config.get("POSTGRESQL_CONFIG", {})
         
@@ -234,11 +257,37 @@ def connect_to_postgresql():
 
 
 def connect_to_mysql():
-    """Connect to cloud MySQL database"""
+    """Connect to cloud MySQL database (using .env or encrypted bin)"""
     try:
+        # Try loading from environment variables first (.env)
+        env_host = os.getenv("MYSQL_HOST")
+        env_user = os.getenv("MYSQL_USER")
+        env_password = os.getenv("MYSQL_PASSWORD")
+        env_database = os.getenv("MYSQL_DATABASE")
+        env_port = os.getenv("MYSQL_PORT", "3306")
+
+        if all([env_host, env_user, env_database]):
+            # print(f"Connecting to MySQL using .env configuration ({env_host})...")
+            return pymysql.connect(
+                host=env_host,
+                user=env_user,
+                password=env_password,
+                database=env_database,
+                port=int(env_port),
+                charset='utf8mb4',
+                cursorclass=pymysql.cursors.DictCursor,
+                connect_timeout=60,
+                read_timeout=60,
+                write_timeout=60
+            )
+
+        # Fallback to encrypted credentials file
         credentials = load_encrypted_credentials()
+        if not credentials:
+            log_msg("Error: No cloud credentials found in .env or encrypted bin.")
+            return None
         
-        conn = pymysql.connect(
+        return pymysql.connect(
             host=credentials.get('host', 'localhost'),
             user=credentials.get('user', ''),
             password=credentials.get('password', ''),
@@ -250,7 +299,6 @@ def connect_to_mysql():
             read_timeout=60,
             write_timeout=60
         )
-        return conn
     except Exception as e:
         log_msg(f"Error connecting to MySQL: {e}")
         return None
@@ -850,6 +898,32 @@ def sync_all_tables():
     return results
 
 
+def get_next_schedule(schedules):
+    """Calculate the next scheduled sync time"""
+    now = datetime.now()
+    current_time = now.strftime("%H:%M")
+    
+    all_times = []
+    for table, schedule in schedules.items():
+        if isinstance(schedule, str) and schedule.strip():
+            all_times.append(schedule.strip())
+        elif isinstance(schedule, list):
+            for t in schedule:
+                if isinstance(t, str) and t.strip():
+                    all_times.append(t.strip())
+    
+    all_times = sorted(list(set(all_times)))
+    
+    if not all_times:
+        return "None"
+        
+    for t in all_times:
+        if t > current_time:
+            return t
+            
+    return all_times[0]  # First schedule of tomorrow
+
+
 def should_sync_table(table_name, schedules):
     """Check if table should be synced based on schedule"""
     current_time = datetime.now().strftime("%H:%M")
@@ -892,7 +966,7 @@ if __name__ == "__main__":
             all_tables_exist = False
     
     if not all_tables_exist:
-        log_msg("Please run docs/4-cloud-mysql.sql to create tables")
+        log_msg("Please run docs/zk_cloud_setup.sql to create tables")
     
     # Try to acquire lock
     if not acquire_lock():
@@ -904,6 +978,7 @@ if __name__ == "__main__":
     try:
         # Continuous operation with scheduled sync times
         schedules = config.get("SYNC_SCHEDULES", {})
+        last_sync_completed_at = None
         
         while True:
             now = datetime.now()
@@ -918,10 +993,21 @@ if __name__ == "__main__":
                     break
             
             if should_sync:
-                log_msg(f"Scheduled sync time reached ({current_time}). Starting full sync...")
+                log_msg(f"Scheduled time reached ({current_time}). Starting full sync...")
                 sync_all_tables()
+                last_sync_completed_at = datetime.now()
+                
+                # Show waiting message after sync
+                next_t = get_next_schedule(schedules)
+                log_msg(f"Sync completed at {last_sync_completed_at.strftime('%H:%M:%S')}. Waiting for next schedule at {next_t}...")
+                
+                # Sleep for 61 seconds to avoid re-triggering in the same minute
+                time.sleep(61)
             else:
-                log_msg(f"Current time: {current_time} (waiting for scheduled time)")
+                # Only show waiting message once every 10 minutes to avoid log spam
+                if not last_sync_completed_at or (now.minute % 10 == 0 and now.second < 30):
+                    next_t = get_next_schedule(schedules)
+                    log_msg(f"Sync idle. Waiting for next schedule at {next_t}... (Current time: {current_time})")
             
             # Sleep for 30 seconds
             time.sleep(30)

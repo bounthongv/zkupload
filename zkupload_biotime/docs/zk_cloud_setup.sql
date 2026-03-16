@@ -63,7 +63,7 @@ CREATE TABLE employees (
     department_id INT NULL,
     emp_type INT NULL,
     hire_date DATE NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
     mobile VARCHAR(20) NULL,
     email VARCHAR(50) NULL,
     last_sync DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -78,8 +78,8 @@ CREATE TABLE employees (
     INDEX idx_emp_code_active (emp_code, is_active),
     
     -- Unique constraint on emp_code
-    UNIQUE KEY unique_emp_code (emp_code),
-    
+    UNIQUE KEY unique_emp_code (emp_code)
+
     -- Foreign key to departments (optional, can be disabled if needed)
     -- CONSTRAINT fk_employee_department FOREIGN KEY (department_id) REFERENCES departments(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -99,7 +99,7 @@ CREATE TABLE devices (
     terminal_alias VARCHAR(50) NOT NULL,
     ip_address VARCHAR(50) NULL,
     state INT NULL,
-    is_attendance BOOLEAN NULL,
+    is_attendance TINYINT(1) NULL,
     last_activity DATETIME NULL,
     last_sync DATETIME DEFAULT CURRENT_TIMESTAMP,
     
@@ -147,8 +147,8 @@ CREATE TABLE attendance_logs (
     
     -- Unique constraint to prevent duplicate uploads
     -- Same employee cannot have same punch_time from same device
-    UNIQUE KEY unique_emp_punch (emp_code, punch_time, terminal_sn),
-    
+    UNIQUE KEY unique_emp_punch (emp_code, punch_time, terminal_sn)
+
     -- Foreign keys (optional, can be enabled if referential integrity is needed)
     -- CONSTRAINT fk_attendance_employee FOREIGN KEY (emp_id) REFERENCES employees(id),
     -- CONSTRAINT fk_attendance_device FOREIGN KEY (terminal_id) REFERENCES devices(id)

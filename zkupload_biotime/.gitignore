@@ -28,6 +28,7 @@ wheels/
 *.spec.bak
 
 # Credentials (IMPORTANT: Never commit these)
+.env
 encrypted_credentials.bin
 last_sync_zk.txt
 *.lock

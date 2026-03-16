@@ -15,6 +15,11 @@ from datetime import datetime
 import psycopg2
 import pymysql
 from cryptography.fernet import Fernet
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 from PyQt5.QtWidgets import (
     QApplication, QSystemTrayIcon, QMenu, QAction, QMessageBox, 
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
@@ -151,13 +156,26 @@ class SyncWorker(QThread):
         super().__init__()
         self.running = False
         self.paused = False
+        self.manual_sync_requested = False
+        self.manual_sync_table = None
         self.credentials = load_encrypted_credentials()
     
     def run(self):
         self.running = True
         last_run_minute = None
+        last_sync_completed_at = None
         
         while self.running:
+            # Check for manual sync request first
+            if self.manual_sync_requested:
+                if self.manual_sync_table:
+                    self.perform_single_table_sync(self.manual_sync_table)
+                else:
+                    self.sync_all_tables()
+                self.manual_sync_requested = False
+                self.manual_sync_table = None
+                last_sync_completed_at = datetime.now()
+            
             if not self.paused:
                 current_config = load_config()
                 schedules = current_config.get("SYNC_SCHEDULES", {})
@@ -182,16 +200,47 @@ class SyncWorker(QThread):
                         self.status_signal.emit(f"Syncing at {current_time}...")
                         self.sync_all_tables()
                         last_run_minute = current_time
+                        last_sync_completed_at = datetime.now()
+                        
+                        # Show waiting message after sync
+                        next_t = self.get_next_schedule(schedules)
+                        self.log_signal.emit(f"Sync completed at {last_sync_completed_at.strftime('%H:%M:%S')}. Waiting for next schedule at {next_t}...")
+                        
+                        # Sleep for 61 seconds to avoid re-triggering in the same minute
+                        time.sleep(61)
                 else:
-                    time.sleep(30)
-            else:
-                time.sleep(1)
-                continue
+                    # Only show waiting message once every 10 minutes to avoid log spam
+                    if not last_sync_completed_at or (now.minute % 10 == 0 and now.second < 30):
+                        next_t = self.get_next_schedule(schedules)
+                        self.log_signal.emit(f"Sync idle. Waiting for next schedule at {next_t}... (Current time: {current_time})")
             
             if not self.paused:
                 time.sleep(30)
             else:
                 time.sleep(1)
+    
+    def get_next_schedule(self, schedules):
+        """Calculate the next scheduled sync time"""
+        now = datetime.now()
+        current_time = now.strftime("%H:%M")
+        
+        all_times = []
+        for table, schedule in schedules.items():
+            if isinstance(schedule, str):
+                all_times.append(schedule)
+            elif isinstance(schedule, list):
+                all_times.extend(schedule)
+        
+        all_times = sorted(list(set(all_times)))
+        
+        if not all_times:
+            return "None"
+            
+        for t in all_times:
+            if t > current_time:
+                return t
+                
+        return all_times[0]  # First schedule of tomorrow
     
     def stop(self):
         self.running = False
@@ -202,9 +251,45 @@ class SyncWorker(QThread):
     def resume(self):
         self.paused = False
     
+    def request_manual_sync(self, table_name=None):
+        """Request a manual sync from another thread"""
+        self.manual_sync_requested = True
+        self.manual_sync_table = table_name
+        self.log_signal.emit(f"Manual sync request received for {table_name if table_name else 'all tables'}")
+    
+    def perform_single_table_sync(self, table_name):
+        """Perform sync for a single table in the background thread"""
+        if table_name == 'departments':
+            self.sync_departments()
+        elif table_name == 'employees':
+            self.sync_employees()
+        elif table_name == 'devices':
+            self.sync_devices()
+        elif table_name == 'attendance_logs':
+            self.sync_attendance_logs()
+    
     def connect_to_postgresql(self):
-        """Connect to ZKBioTime PostgreSQL database"""
+        """Connect to ZKBioTime PostgreSQL database (using .env or config.json)"""
         try:
+            # Try loading from environment variables first (.env)
+            env_host = os.getenv("PG_HOST")
+            env_port = os.getenv("PG_PORT")
+            env_db = os.getenv("PG_DATABASE")
+            env_user = os.getenv("PG_USER")
+            env_pass = os.getenv("PG_PASSWORD")
+
+            if all([env_host, env_db, env_user]):
+                # print(f"Connecting to PostgreSQL using .env configuration ({env_host})...")
+                return psycopg2.connect(
+                    host=env_host,
+                    port=int(env_port) if env_port else 7496,
+                    database=env_db,
+                    user=env_user,
+                    password=env_pass if env_pass else "",
+                    connect_timeout=60
+                )
+
+            # Fallback to config.json
             config = load_config()
             pg_config = config.get("POSTGRESQL_CONFIG", {})
             
@@ -222,9 +307,33 @@ class SyncWorker(QThread):
             return None
     
     def connect_to_mysql(self):
-        """Connect to cloud MySQL database"""
+        """Connect to cloud MySQL database (using .env or encrypted bin)"""
         try:
+            # Try loading from environment variables first (.env)
+            env_host = os.getenv("MYSQL_HOST")
+            env_user = os.getenv("MYSQL_USER")
+            env_password = os.getenv("MYSQL_PASSWORD")
+            env_database = os.getenv("MYSQL_DATABASE")
+            env_port = os.getenv("MYSQL_PORT", "3306")
+
+            if all([env_host, env_user, env_database]):
+                # print(f"Connecting to MySQL using .env configuration ({env_host})...")
+                return pymysql.connect(
+                    host=env_host,
+                    user=env_user,
+                    password=env_password,
+                    database=env_database,
+                    port=int(env_port),
+                    charset='utf8mb4',
+                    cursorclass=pymysql.cursors.DictCursor,
+                    connect_timeout=60
+                )
+
+            # Fallback to encrypted credentials file
             current_credentials = load_encrypted_credentials()
+            if not current_credentials:
+                self.log_signal.emit("Error: No cloud credentials found in .env or encrypted bin.")
+                return None
             
             conn = pymysql.connect(
                 host=current_credentials.get('host', 'localhost'),
@@ -945,11 +1054,13 @@ class SystemTrayApp:
         if os.path.exists(icon_path):
             icon = QIcon(icon_path)
         else:
+            # Create a blue icon if the .ico file is missing
             pixmap = QPixmap(32, 32)
-            pixmap.fill()
+            pixmap.fill(QColor(0, 120, 215)) # Windows Blue
             icon = QIcon(pixmap)
         
         self.tray_icon.setIcon(icon)
+        self.tray_icon.setToolTip("ZK BioTime Cloud Sync")
         
         # Create menu
         self.tray_menu = QMenu()
@@ -1082,24 +1193,16 @@ class SystemTrayApp:
             self.table_widgets[table_name].update_status(status_data)
     
     def sync_table(self, table_name):
-        """Sync a specific table"""
-        self.log_message(f"Manual sync initiated for {table_name}")
-        
-        if table_name == 'departments':
-            self.worker.sync_departments()
-        elif table_name == 'employees':
-            self.worker.sync_employees()
-        elif table_name == 'devices':
-            self.worker.sync_devices()
-        elif table_name == 'attendance_logs':
-            self.worker.sync_attendance_logs()
+        """Sync a specific table via worker thread request"""
+        self.log_message(f"Manual sync requested for {table_name}")
+        self.worker.request_manual_sync(table_name)
     
     def update_status(self, status):
         """Update status in menu"""
         self.status_action.setText(f"Status: {status}")
     
     def log_message(self, message):
-        """Log message handler"""
+        """Log message handler and update log viewer if open"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
         print(log_entry)
@@ -1108,6 +1211,10 @@ class SystemTrayApp:
         # Keep only last 1000 messages
         if len(self.log_messages) > 1000:
             self.log_messages = self.log_messages[-1000:]
+            
+        # Update log viewer if it's open
+        if hasattr(self, 'current_log_viewer') and self.current_log_viewer.isVisible():
+            self.current_log_viewer.log_text.append(log_entry)
     
     def start_service(self):
         """Start the sync service"""
@@ -1122,9 +1229,9 @@ class SystemTrayApp:
         self.log_message("Service stopped")
     
     def sync_now(self):
-        """Force sync all tables now"""
-        self.log_message("Manual full sync initiated")
-        self.worker.sync_all_tables()
+        """Force sync all tables via worker thread request"""
+        self.log_message("Manual full sync requested")
+        self.worker.request_manual_sync()
     
     def check_status(self):
         """Check service status"""
@@ -1157,27 +1264,33 @@ class SystemTrayApp:
             QMessageBox.critical(None, "Error", f"Could not open configuration: {str(e)}")
     
     def view_logs(self):
-        """Open log viewer"""
+        """Open log viewer with real-time updates"""
         try:
-            log_dialog = QDialog()
-            log_dialog.setWindowTitle("Log Viewer")
-            log_dialog.setGeometry(300, 300, 700, 500)
+            if not hasattr(self, 'current_log_viewer') or not self.current_log_viewer.isVisible():
+                self.current_log_viewer = QDialog()
+                self.current_log_viewer.setWindowTitle("Log Viewer")
+                self.current_log_viewer.setGeometry(300, 300, 700, 500)
+                
+                layout = QVBoxLayout()
+                self.current_log_viewer.log_text = QTextEdit()
+                self.current_log_viewer.log_text.setReadOnly(True)
+                self.current_log_viewer.log_text.setFont(QFont("Consolas", 9))
+                
+                # Load existing logs
+                for msg in self.log_messages:
+                    self.current_log_viewer.log_text.append(msg)
+                
+                layout.addWidget(self.current_log_viewer.log_text)
+                
+                close_btn = QPushButton("Close")
+                close_btn.clicked.connect(self.current_log_viewer.close)
+                layout.addWidget(close_btn)
+                
+                self.current_log_viewer.setLayout(layout)
             
-            layout = QVBoxLayout()
-            log_text = QTextEdit()
-            log_text.setReadOnly(True)
-            
-            for msg in self.log_messages[-100:]:
-                log_text.append(msg)
-            
-            layout.addWidget(log_text)
-            
-            close_btn = QPushButton("Close")
-            close_btn.clicked.connect(log_dialog.close)
-            layout.addWidget(close_btn)
-            
-            log_dialog.setLayout(layout)
-            log_dialog.exec_()
+            self.current_log_viewer.show()
+            self.current_log_viewer.raise_()
+            self.current_log_viewer.activateWindow()
         except Exception as e:
             QMessageBox.critical(None, "Error", f"Could not open log viewer: {str(e)}")
     
@@ -1186,7 +1299,8 @@ class SystemTrayApp:
         QMessageBox.information(
             None,
             "About ZK BioTime Cloud Sync",
-            "ZK BioTime Cloud Sync v2.0 (4-Table Sync)\n\n"
+            "ZK BioTime Cloud Sync v2.0 (4-Table Sync)\n"
+            "By Apis Co. Ltd. March 2026\n\n"
             "Syncs 4 tables from ZKBioTime PostgreSQL\n"
             "to cloud MySQL database:\n\n"
             "• departments (daily)\n"
@@ -1208,5 +1322,22 @@ class SystemTrayApp:
 
 
 if __name__ == "__main__":
-    app = SystemTrayApp()
-    app.run()
+    print("====================================================")
+    print(" ZK BioTime Cloud Sync - System Tray Application ")
+    print("====================================================")
+    print("Status: Application is starting...")
+    print("Check your System Tray (near the clock) for the icon.")
+    print("Right-click the icon for the menu, or double-click to show the status.")
+    print("Press Ctrl+C in this console to exit.")
+    print("----------------------------------------------------")
+    
+    try:
+        app = SystemTrayApp()
+        print("Status: Application is running in the system tray.")
+        app.run()
+    except KeyboardInterrupt:
+        print("\nApplication closed by user.")
+    except Exception as e:
+        print(f"\nCRITICAL ERROR: {e}")
+        import traceback
+        traceback.print_exc()

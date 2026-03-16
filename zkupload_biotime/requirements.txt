@@ -11,5 +11,10 @@ cryptography>=41.0.0    # Credential encryption
 # System Tray UI (for tray application)
 PyQt5>=5.15.9           # System tray interface
 
+# Environment Configuration
+python-dotenv>=1.0.0    # For .env file support
+
 # Build Tools (for creating executables)
 pyinstaller>=6.3.0      # Compile to standalone .exe
+
+pymysql
